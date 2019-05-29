@@ -198,3 +198,136 @@ valueRef(); // 321
 ```
 
 # 内联变量
+inline标识符可以应用到变量上，形式和语义和inline函数一样。
+```C++
+// 使用Compiler Explorer获得反汇编实例
+struct S { int x; };
+inline S x1 = S{321}; // mov esi, dword ptr [x1]
+                      // x1: .long 321
+
+S x2 = S{123};  // mov eax, dword ptr [.L_ZZ4mainE2x2]
+                // mov dword ptr [rbp - 8], eax
+                // .L_ZZ4main#2x2: .long 123
+```
+
+## 嵌套命名空间
+使用命名空间解析操作符定义嵌套命名空间。
+```C++
+namespace A {
+    namespace B {
+        namespace C {
+            int i;
+        }
+    }
+}
+// vs.
+namespace A::B::C {
+    int i;
+}
+```
+
+### 结构化绑定
+现在C++允许这样的写法`auto [ x, y, z ] = expr;`，其中`expr`是类似于tuple的对象，该语句将其元素分别绑定到`x`，`y`，`z`（`expr`声明时也包含三个元素）。_类似于tuple的对象_包括[`std::tuple`](#stdtuple)，std::pair`，[`std::array`](#stdarray)，以及聚合结构体。
+```C++
+using Coordinate = std::pair<int, int>;
+Coordinate origin() {
+    return Coordinate{0, 0};
+}
+
+const auto [ x, y ] = origin();
+x; // == 0
+y; // == 0
+```
+
+## 带初始化表达式的选择语句
+新版的`if`和`switch`语句简化了共用代码模式，并且使共用代码的作用域更加贴合使用意图。
+```C++
+{
+    std::lock_guard<std:;mutex> lk(mx);
+    if (v.empty()) v.push_back(val);
+}
+// vs.
+if (std::lock_guard<std::mutex> lk(mx); v.empty()) {
+    v.push_back(val);
+}
+```
+```C++
+Foo gadget(args);
+switch (auto s = gadget.status()) {
+    case OK: gadget.zip(); break;
+    case Bad: throw BadFoo(s.message());
+}
+// vs.
+switch(Foo gadget(args); auto s = gadget.status()) {
+    case OK: gadget.zip(); break;
+    case Bad: throw BadFoo(s.message());
+}
+```
+
+### constexpr if
+代码可以根据编译时条件而实例化。
+```C++
+template <typename T>
+constexpr bool isIntegral() {
+    if constexpr (std::is_integral<T>::value) {
+        return true;
+    } else {
+        return false;
+    }
+}
+static_assert(isIntegral<int>() == true);
+static_assert(isIntegral<char>() == true);
+static assert(isIntegral<double>() == false);
+struct S {};
+static_assert(isIntegral<S>() == false);
+```
+
+### UTF-8 字符字面量
+`u8`开头的字符字面量是`char`类型的UTF-8字符字面量。UTF-8字符字面量采用ISO 10646编码。
+```C++
+char x = u8'x';
+```
+
+### Enums直接用列表初始化
+Enums现在可以用花括号语法来初始化。
+```C++
+enum byte : unsigned char {};
+byte b {0}; // OK
+byte c {-1}; // ERROR
+byte d = byte{1}; // OK
+byte e = byte{256}; // ERROR
+```
+
+## C++17 Library特性
+
+### std::variant
+类模板`std::variant`表示类型安全的`union`。`std::variant`的实例在任何时候都持有一个候选类型的值（当然也有可能是无值）。
+```C++
+std:;variant<int, double> v {12};
+std::get<int>(v); // == 12
+std::get<0>(v); // == 12
+v = 12.0
+std::get<double>(v); // == 12.0
+std::get<1>(v); // == 12.0
+```
+
+### std::optional
+类模板`std:;optional`管理一个可选的值，比如，一个值可能存在也可能不存在。optional常见的使用场景是作为一个可能失败的函数的返回值。
+```C++
+std::optional<std::string> create(bool b) {
+    if (b) {
+        return "Godzilla";
+    } else {
+        return {};
+    }
+}
+
+create(false).value_or("empty"); // == "empty"
+create(true).value(); // == "Godzilla"
+// 由函数返回的optional返回值可以直接作为while和if的条件
+if (auto str = create(true)) {
+    // ...
+}
+```
+
+### std::any
