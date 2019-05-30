@@ -331,3 +331,140 @@ if (auto str = create(true)) {
 ```
 
 ### std::any
+一种类型安全的容器，其中只有一个值，但是可以是任意类型。
+```C++
+std::any x {5};
+x.has_value(); // == true
+std::any_cast<int>(x); // == 5
+std::any_cast<int&>(x) = 10; 
+std::any_cast<int>(x); // == 10
+```
+
+### std::string_view
+对string的非拥有引用。可以提供基于string的抽象，在解析字符串时非常有用。
+```C++
+// 常规string
+std::string_view cppstr {"foo"};
+// 宽字符string
+std::wstring_view wcstr_v {L"baz"};
+// 字符数组
+char array[3] = {'b', 'a', 'r'};
+std::string_view array_v(array, std::size(array));
+```
+```C++
+std::string str {"    trim me"};
+std::string_view v {str};
+v.remove_prefix(std::min(v.find_first_not_of(" "), v.size()));
+str; // == "    trim me"
+v; // == "trim me"
+```
+
+### std::invoke
+调用一个`Callable`对象，并且传入参数。常见的可调用对象有`std::function`和`std::bind`，调用方式和常规函数非常像。
+```C++
+template <typename Callable>
+class Proxy {
+    Callable c;
+public:
+    Proxy(Callable c): c(c) {}
+    template <class... Args>
+    decltype(auto) operator()(Args&&... args) {
+        // ...
+        return std::invoke(c, std::forward<Args>(args)...);
+    }
+};
+auto add = [](int x, int y) {
+    return x + y;
+};
+Proxy<decltype(add)> p {add};
+p(1, 2); // == 3
+```
+
+### std::apply
+调用一个可调用对象，参数以tuple传入。
+```C++
+auto add = [](int x, int y) {
+    return x + y;
+};
+std::apply(add, std::make_tuple(1, 2)); // == 3
+```
+
+### std::filesystem
+`std::filesystem`库提供了管理文件系统中文件、目录和路径的一个标准方法。
+
+这里有一个例子，如果临时路径下有足够的磁盘空间，我们把一个大文件拷贝到这里。
+```C++
+const auto bigFilePath {"bigFileToCopy"};
+if (std::filesystem::exists(bigFilePath)) {
+    const auto bigFileSize {std::filesystem::file_size(bigFilePath)};
+    std::filesystem::path tmpPath {"/tmp"};
+    if (std::filesystem::space(tmpPath).available > bigFileSize) {
+        std::filesystem::create_directory(tmpPath.append("example"));
+        std::filesystem::copy_file(bigFilePath, tmpPath.append("newFile"));
+    }
+}
+```
+
+### std::byte
+`std::byte`提供了一个将数据表示为byte的标准方式。`std:;byte`较`char`或`unsigned char`的优势在于，`std::byte`并不是字符类型，也不是算术类型，而且只能重载位运算操作符。
+```C++
+std::byte a {0};
+std::byte b {0xFF};
+int i = std::to_integer<int>(b); // 0xFF
+std:;byte c = a & b;
+int j = std::to_integer<int>(c); // 0
+```
+std::byte`是一个简单的enum，所以也可是使用花括号的初始化方式。
+
+### Splicing for maps and sets
+移动元素，合并容器，不再需要耗时的拷贝、移动、堆内存分配和释放。
+
+例子说的是把map中的元素移动到另一个map。
+```C++
+std::map<int, string> src {{1, "one"}, {2, "two"}, {3, "buckle my shoe"}};
+std::map<int, string> dst {{3, "three"}};
+dst.insert(src.extract(src.find(1))); // 从`src`中删除{1, "one"}，并将其插入到`dst`，快如闪电。
+dst.insert(src.extract(2)); // {2, "two"}, 从`src`到`dst`。
+// dst == { { 1, "one" }, { 2, "two" }, { 3, "three" } };
+```
+
+插入一整个set。
+```C++
+std::set<int> src {1, 3, 5};
+std::set<int> dst {2, 4, 5};
+dst.merge(src);
+// src == {5}
+// dst == {1, 2, 3, 4, 5}
+```
+
+插入的元素并不在容器的作用域里。
+```C++
+auto elementFactory() {
+    std::set<...> s;
+    s.emplace(...);
+    return s.extract(s.begin());
+}
+s2.insert(elementFactory());
+```
+
+改变map元素的key。
+```C++
+std::map<int, string> m {{1, "one"}, {2, "two"}, {3, "three"}};
+auto e = m.extract(2);
+e.key() = 4;
+m.insert(std::move(e));
+// m == {{1, "one"}, {3, "three"}, {4, "two"}}
+```
+
+### 并行算法
+许多STL算法，比如`copy`，`find`，`sort`，开始支持*并行执行策略*：`seq`顺序执行，`par`并行执行，`par_unseq`并行非有序执行。
+
+```C++
+std::vector<int> longVector;
+// 用并行执行策略查找元素
+auto result1 = std::find(std::execution::par, std::begin(longVector), std::end(longVector), 2);
+// 用顺序执行策略对vector排序
+auto result2 = std::sort(std::execution:seq, std::begin(longVector), std::end(longVector));
+```
+
+## C++14 语言特性
