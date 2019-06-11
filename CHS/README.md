@@ -468,3 +468,177 @@ auto result2 = std::sort(std::execution:seq, std::begin(longVector), std::end(lo
 ```
 
 ## C++14 语言特性
+
+### 二进制字面量
+二进制字面量提供了一种便捷的表示二进制数的方式。
+数位之间可以用`'`分隔。
+```C++
+0b110 // == 6
+0b1111'1111 // == 255
+```
+
+### 泛型lambda表达式
+C++14允许`auto`作为参数列表中的类型标识符，使多态lambda表达式成为现实。
+```C++
+auto identity = [](auto x) { return x; };
+int three = identity(3); // == 3
+std::string foo = identify("foo"); // == "foo"
+```
+
+### Lambda表达式带初始化的捕获
+这就允许lambda表达式在创建时，捕获用任意表达式初始化的变量。捕获变量的名字不一定非要跟闭合作用域中的变量相关，无非是在lambda函数体中新增一个变量名。需要注意，初始化表达式是在lambda表达式_创建时_求值(并非在_调用时_)。
+```C++
+int factory(int i) { return i * 10; }
+auto f = [x = factory(2)] { return x ;}; // return 20
+
+auto generator = [x = 0]() mutable {
+    // 如果不声明为`mutable`，编译会失败，因为每次调用都会修改x的值
+    return x++;
+};
+auto a = generator(); // == 0
+auto b = generator(); // == 1
+auto c = generator(); // == 2
+```
+因为现在可以_move_(或_forward_)一个参数到lambda表达式里，之前只能是按值或者按引用捕获，我们现在可以按值捕获一些只允许move的类型。注意，在下面的实例中，`=`左手边的`task2`的捕获列表中的`p`，是lambda函数体的私有变量，并不是指向原来的`p`。
+```C++
+auto p = std::make_unique<int>(1);
+
+auto task1 = [=] { *p = 5; }; // ERROR: std::unique_ptr无法被复制
+// vs.
+auto task2 = [p = std::move(p)] { *p = 5; }; // OK: p 移动构造到这个闭包对象
+// task2创建之后，原来的p就为空了
+```
+如果是按引用捕获，变量可以用一个跟被引用变量不同的名字。
+```C++
+auto x = 1;
+auto f = [&r = x, x = x * 10] { 
+    ++r;
+    return r + x;
+};
+f(); // x为2，返回12
+```
+
+### 返回类型推导
+C++14中使用`auto`作为函数的返回类型，编译器会尝试推导实际的返回类型。在lambda表达式而言，我们可以用`auto`声明返回类型，编译器会推导出实际返回类型，并且返回类型有可能是引用或rvalue引用。
+```C++
+// 返回类型推导为`int`
+auto f(int i) {
+    return i;
+}
+```
+```C++
+template <typename T>
+auto& f(T& t) {
+    return t;
+}
+
+// 返回对推导类型的引用
+auto g = [](auto &x) -> auto& { return f(x); };
+int y = 123;
+int& z = g(y); // `y`的引用
+```
+
+### decltype(auto)
+`decltype(auto)`类型标识符也可以推导实际类型。与`auto`相比，它可以推导返回类型，并且保持引用及cv限定符。
+```C++
+const int x = 0;
+auto x1 = x; // int
+decltype(auto) x2 = x; // const int
+int y = 0;
+int& y1 = y;
+auto y2 = y1; // int
+decltype(auto) y3 = y1; // int&
+int&& z = 0;
+auto z1 = std::move(z); // int
+decltype(auto) z2 = std::move(z); // int&&
+```
+```C++
+// 注意：对于泛型代码特别有用！
+
+// 返回类型是`int`。
+auto f(const int& i) {
+    return i;
+}
+
+// 返回类型是`const int&`.
+decltype(auto) g(const int& i) {
+    return i;
+}
+
+int x = 123;
+static_assert(std::is_same<const int&, decltype(f(x))>::value == 0);
+static_assert(std::is_same<int, decltype(f(x))>::value == 1);
+static_assert(std::is_same<const int&, decltype(g(x))>::value == 1);
+```
+
+另见: [`decltype`](#decltype)
+
+### 给constexpr函数松绑
+在C++11中，`constexpr`函数体只能包含一些非常有限的语法，包括（但不限于）：`typedef`, `using`, 和一个`return`语句。在C++14，`constexpr`函数已经允许像`if`语句，多个`return`，循环等常见的语法。
+```C++
+constexpr int factorial(int n) {
+    if (n <= 1) {
+        return 1;
+    } else {
+        return n * factorial(n - 1);
+    }
+}
+factorial(5); // == 120
+```
+
+### 模板变量
+C++14允许变量模板化：
+
+```C++
+template<class T>
+constexpr T pi = T(3.1415926535897932385);
+template<class T>
+constexpr T e = T(2.7182818284590452353);
+```
+
+## C++14 Library 特性
+
+### 用户为标准库类型定义字面量
+用户为标准库类型定义的字面量，包括`chrono`和`basic_string`等内建字面量。如果带`constexpr`限定符，字面量可以在编译时使用，应用场景包括编译时整数解析，二进制字面量，虚数字面量等。
+```C++
+using namespace std::chrono_literals;
+auto day = 24h;
+day.count(); // == 24
+std::chrono::duration_cast<std::chrono::minutes>(day)::count(); // == 1440
+```
+
+### 编译时整数序列
+类模板`std::integer_sequence`代表编译时的整数序列。有一些helper接口是基于它而实现的：
+* `std::make_integer_sequence<T, N...>` - 创建了一个序列，序列中的元素类型为`T`，序列的元素为`0, ..., N - 1`。
+* `std::index_sequence_for<T...>` - 将模板参数包转换为一个整数序列。
+
+将一个数组转换为tuple：
+```C++
+template<typename Array, std::size_t... I>
+decltype(auto) a2t_impl(const Array& a, std::integer_sequence<std::size_t, I...>) {
+    return std::make_tuple(a[I], ...);
+}
+
+template<typename T, std::size_t N, typename Indices = std::make_index_sequence<N>>
+decltype(auto) a2t(const std::array<T, N>& a) {
+    return a2t_impl(a, Indices());
+}
+```
+
+### std::make_unique
+如果我们想创建一个`std::unique_ptr`实例，推荐使用`std::make_unique`，因为：
+* 避免使用`new`操作符。
+* 避免重复类似的代码。为每个指针指明具体指向的类型，也很烦的。
+* 最重要的是，这家伙是异常安全的。假如我们这样调用函数`foo`：
+```C++
+foo(std::unique_ptr<T>{new T{}}, function_that_throws(), std::unique_ptr<T>{new T{}});
+```
+编译器会调用`new T{}`，然后`function_that_throws()`，然后调用blabla。在第一次构造`T`对象时，我们是在堆上分配内存，并执行构造函数。遇到`function_that_throws`，异常了，然后就内存泄露了。如果用`std::make_unique`，则可以避免内存泄露:
+```C++
+foo(std::make_unique<T>(), function_that_throws(), std::make_unique<T>());
+```
+
+想了解关于`std::unique_ptr`和`std::shared_ptr`的更多信息，请移步[智能指针](#智能指针)。
+
+## C++11 语言特性
+
