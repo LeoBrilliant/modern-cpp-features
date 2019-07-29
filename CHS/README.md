@@ -1041,3 +1041,368 @@ for(int x : a) x *= 2;
 ```
 
 ### move语义下的特殊成员函数
+对象复制时，有可能调用拷贝构造函数或拷贝赋值操作符，C++11 引入了移动语义，现在又多了移动构造函数和移动赋值操作符。
+```CPP
+struct A {
+    std::string s;
+    A() : s("test") {}
+    A(const A& o) : s(o.s) {}
+    A(A&& o) : s(std::move(o.s)) {}
+    A& operator=(A&& o) {
+        s = std::move(o.s);
+        return *this;
+    }
+};
+
+A f(A a) {
+    return a;
+}
+
+A a1 = f(A{}); // 通过临时右值移动构造
+A a2 = std::move(a1); // 使用std::move移动构造
+A a3 = A{};
+a2 = std::move(a3); // 用std::move移动赋值
+a1 = f(A{}); // 临时右值移动赋值
+```
+
+### 转换构造函数
+转换构造函数将初始化列表包含的值转换成构造函数的参数。
+```CPP
+struct A {
+    A(int) {}
+    A(int, int) {}
+    A(int, int, int) {}
+};
+
+A a {0, 0}; // 调用A::A(int, int)
+A b(0, 0); // 调用A::A(int, int)
+A c = {0, 0}; // 调用A::A(int, int)
+A d {0, 0, 0}; // 调用A::A(int, int, int)
+```
+
+注意，初始化列表语法不允许类型缩窄：
+```CPP
+struct A {
+    A(int) {}
+};
+
+A a(1.1); // OK
+A b {1.1}; // 错误，double转int，类型缩窄
+```
+
+注意，如果构造函数接收`std::initializer_list`，编译器会调用此构造函数：
+```CPP
+struct A {
+    A(int) {}
+    A(int, int) {}
+    A(int, int, int) {}
+    A(std::initializer_list<int>) {}
+};
+
+A a {0, 0}; // 调用A::A(std::initializer_list<int>)
+A b(0, 0); // 调用A::A(int, int)
+A c = {0, 0}; // 调用A::A(std::initializer_list<int>)
+A d = {0， 0， 0}; // 调用A::A(std::initializer_list<int>)
+```
+
+### 显式类型转换函数
+类型转换函数可以使用`explicit`关键字，用来阻止隐式类型转换。
+```CPP
+struct A {
+    operator bool() const { return true; }
+};
+
+struct B {
+    explicit operator bool() const { return true; }
+};
+
+A a;
+if (a); // OK， 调用A::operator bool()
+bool ba = a; // OK, 拷贝初始化，调用A::operator bool()
+
+B b;
+if (b); // OK，调用B::operator bool()
+bool bb = b; // 错误，拷贝构造不考虑B::operator bool()，即无法完成隐式类型转换。
+```
+### Inline命名空间
+内联命名空间，看起来就像是父命名空间的一部分，允许函数特化、定义各种版本。这是个可传递的属性，如果命名空间A包含B，A同时包含C，并且B和C都是内联命名空间，则C的成员可以视为A的成员。
+
+```CPP
+namespace Program {
+    namespace Version1 {
+        int getVersion() { return 1; }
+        bool isFirstVersion() { return true;
+    }
+    inline namespace Version2 {
+        int getVersion() { return 2; }
+    }
+}
+
+int version { Program::getVersion() };  // Version2::gerVersion()
+int oldVersion { Program::Version1::getVersion() }; // Version1::getVersion()
+bool firstVersion { Program::isFirstVersion() }; // 增加Version2之后，编译出错。
+```
+
+### 非静态数据成员初始化列表
+允许非静态数据成员在声明时就地初始化，潜在减轻了构造函数默认初始化的负担。
+
+```CPP
+// C++11 之前的默认初始化
+class Human {
+    Human() : age(0) {}
+private:
+    unsigned age;
+};
+// C++11 的默认初始化
+class Human {
+private:
+    unsigned age {0};
+};
+```
+
+### 右尖括号
+C++11 现在可以区分出多个右尖括号相邻时，到底是操作符，还是typedef语句的一部分，从此不用再加入空格。
+
+```CPP
+typedef std::map<int, std::map <int, std::map <int, int> > > cpp98LongTypedef;
+typedef std::map<int, std::map <int, std::map <int, int>>>   cpp11LongTypedef;
+```
+
+## C++11 库特性
+
+### std::move
+`std::move`表明传入的对象可能被移动，或者说，从一个对象移到另一个对象且不需要拷贝。在特定情况下，传入的对象在移动之后可能无法再次使用。
+
+`std::move`无非是将一个对象转换成右值：
+```CPP
+template <typename T>
+typename remove_reference<T>::type&& move(T&& arg) {
+    return static_cast<typename remove_reference<T>::type&&>(arg);
+}
+```
+
+转移`std::unique_ptr`：
+```CPP
+std::unique_ptr<int> p1 { new int{0} };
+std::unique_ptr<int> p2 = p1; // 错误 -- 无法拷贝std::unique_ptr
+std::unique_ptr<int> p3 = std::move(p1); // `p1`移动至`p3`
+                                         // 现在再对`p1`解引用将不再安全
+```
+
+### std::forward
+将传入的参数原样传递出去，不管是左值引用还是右值引用，连cv限定符也保持原汁原味。在泛型编程需要传递引用（左值或右值引用）的场景特别有用，像对象工厂。通常和[`转发引用`](#forwarding-references)联合使用。
+
+`std::forward`的定义：
+```CPP
+template <typename T>
+T&& forward(typename remove_reference<T>::type& arg) {
+    return static_cast<T&&>(arg);
+}
+```
+
+函数`wrapper`将一个`A`对象转发到一个新的`A`对象的拷贝构造函数或者移动构造函数：
+```CPP
+struct A {
+    A() = default;
+    A(const A& o) { std::cout << "copied" << std::endl; }
+    A(A&& o) { std::cout << "moved" << std::endl; }
+};
+
+template <typename T>
+A wrapper(T&& arg) {
+    return A{std::forward<T>(arg)};
+}
+
+wrapper(A{}); // moved
+A a;
+wrapper(a); // copied
+wrapper(std::move(a)); // moved
+```
+
+另见：[`转发引用`](#forwarding-references)，[`右值引用`](#rvalue-references)。
+
+### std::thread
+`std::thread`提供了控制线程的标准做法，像创建线程、杀死线程。下面的例子，不同的线程处理不同的计算，然后程序等待其他线程结束之后再退出。
+
+```C++
+void foo(bool clause) { /* 实际运算 */ }
+
+std::vector<std::thread> threadVector;
+threadVector.emplace_back([]() {
+    // lambda表达式
+});
+threadVector.emplace_back(foo, true); // 线程调用foo(true)
+for(auto& thread : threadVector) {
+    thread.join(); // 等待线程们结束
+}
+```
+
+### std::to_string
+将数值型参数转换成`std::string`。
+```C++
+std::to_string(1.2); // == "1.2"
+std::to_string(123); // == "123"
+```
+
+### 类型萃取
+类型萃取定义了一组编译时的基于模板的接口，用来查询或修改类型的属性。
+```C++
+static_assert(std::is_integral<int>::value);
+static_assert(std::is_same<int, int>::value);
+static_assert(std::is_same<std::conditional<true, int, double>::type, int>::value);
+```
+
+### 智能指针
+C++11 引入了`std::unique_ptr`，`std::shared_ptr`，`std::weak_ptr`。`std::auto_ptr`标记为弃用，最终将在C++17中彻底删除.
+
+`std::unique_ptr`是一种不可复制、可移动的智能指针，适用于管理数组和STL容器。**注意：尽可能使用`std::make_X`这类帮助函数来创建智能指针，而不是使用构造函数。具体原因见[std::make_unique](#stdmake_unique)和[std::make_shared](#stdmake_shared).**
+```C++
+std::unique_ptr<Foo> p1  { new Foo{}}; // `p1`拥有`Foo`
+if (p1) {
+    p1->bar();
+}
+
+{
+    std::unique_ptr<Foo> p2 { std::move(p1) }; // 这会儿`p2`拥有`Foo`
+    f(*p2);
+
+    p1 = std::move(p2); // 所有权有回到`p1`手里 -- `p2`销毁
+}
+
+if (p1) {
+    p1->bar();
+}
+// `p1`超出作用域后`Foo`实例也将被毁灭
+```
+
+`std::shared_ptr`用于管理在多个所有者间共享的资源。`std::shared_ptr`拥有一个_管理块_，其中包含被管理的对象和一个引用计数。对管理块的访问是线程安全的，但操作被管理对象这种行为本身*不是*线程安全的。
+```C++
+void foo(std::shared_ptr<T> t) {
+    // 用t干一些事情
+}
+
+void bar(std::shared_ptr<T> t) {
+    // 用t干另一些事情
+}
+
+void baz(std::shared_ptr<T> t) {
+    // 再用t干一些事情
+}
+
+std::shared_ptr<T> p1 { new T{} };
+// 这些函数有没有可能被不同的线程调用？
+foo(p1);
+bar(p1);
+baz(p1);
+```
+
+### std::chrono
+chrono包含一组函数或数据类型，用来处理_durations_，_clocks_和_time points_。这个库的一个应用场景是做benchmarking：
+```C++
+std::chrono::time_point<std::chrono::steady_clock> start, end;
+start = std::chrono::steady_clock::now();
+// 一些计算
+end = std::chrono::steady_clock::now();
+
+std::chrono:;duration<double> elapsed_seconds = end - start;
+double t = elapsed_seconds.count(); // t 表示中间经历了多少秒
+```
+
+### 元组
+元组是一个大小固定、可由异构元素组成的数据结构。可以通过[`std::tie`](#stdtie)解包元组，或`std::get`访问元组的元素。
+```C++
+// `playerProfile`的类型是`std::tuple<int, const char* const char*>`。
+auto playerProfile = std::make_tuple(51, "Frans Nielsen", "NYI");
+std::get<0>(playerProfile); // 51
+std::get<1>(playerProfile); // "Frans Nielsen"
+std::get<2>(playerProfile); // "NYI"
+```
+
+### std::tie
+创建左值引用构成的元组。 解包`std::pair`和`std::tuple`对象时非常有用。`std::ignore`占位符表示忽略对应位置上的元素。在C++17中，可以使用结构化绑定作为替换方案。
+```C++
+// 与元组联合使用。。。
+std::string playerName;
+std::tie(std::ignore, playerName, std::ignore) = std::make_tuple(91, "John Tavares", "NYI");
+
+// 与pair联合使用。。。
+std::string yes, no;
+std::tie(yes, no) = std::make_pair("yes", "no");
+```
+
+### std::array
+`std::array`是一个基于C语言数组的容器。 支持容器的通用操作，比如排序。
+```C++
+std::array<int, 3> a = {2, 1, 3};
+std::sort(a.begin(), a.end()); // a == {1, 2, 3};
+for (int& x : a) x *= 2; // a == {2, 4, 6};
+```
+
+### Unordered容器
+这些容器支持平均常数时间复杂度的操作，像查找、插入和删除等。此类容器通过将各个元素哈希至对应的桶中，实现常数时间复杂度，在“提高速度”的同时，牺牲了元素之间的有序性。目前有四种非排序容器：
+* `unordered_set`
+* `unordered_multiset`
+* `unordered_map`
+* `unordered_multimap`
+
+### std:make_shared
+推荐用`std::make_shared`创建`std::shared_ptr`实例，原因如下：
+* 避免使用`new`操作符。
+* 消除重复代码，主要是无需显式给定指针所指数据的具体类型。
+* 是类型安全的。加入我们像这样调用函数`foo`:
+```C++
+foo(std::shared_ptr<T>{new T{}}, function_that_throws(), std::shared_ptr<T>{new T{}});
+```
+如果编译器在调用`new T{}`之后，`function_that_throws()`真的抛出了异常，会发生什么呢？因为`T`还在堆上，异常之后就会有内存泄露。`std::make_shared`就是异常安全的。
+```C++
+foo(std::make_shared<T>(), function_that_throws(), std::make_shared<T>());
+```
+* 不必做两次内存分配。`std::shared_ptr{ new T{} }`，首先在堆上分配`T`的内存，然后在shared_ptr内部，编译器要给控制块分配内存。
+
+参见[智能指针](#smart-pointers)，了解`std::unique_ptr`和`std::shared_ptr`的更多内容。
+
+### 内存模型
+C++11 引入了C++的内存模型，从而在语言级别支持线程和原子操作。这些操作包括但不限于原子读写，compare-and-swap，atomic flags, promises, futures, locks, 和condition variables。
+
+参见[std::thread](#stdthread)
+
+### std::async
+`std::async`表示其修饰的函数要么是异步执行，要么是惰性求值，然后返回一个`std::future`，其中含有函数调用的结果。
+
+`std::async`可以是：
+1. `std::launch::async | std::launch::deferred`，由具体实现来决定是否异步执行或惰性求值。
+2. `std::launch::async` 在新线程中执行可调用对象。
+3. `std::launch::deferred` 在当前线程中进行惰性求值。
+
+```C++
+int foo() {
+    /* 推会儿磨，记得把豆腐收好 */
+    return 1000;
+}
+
+auto handle = std::async(std::launch::async, foo); // 创建一个异步任务
+auto result = handle.get(); // 豆腐磨好了没
+```
+
+## 致谢
+* [cppreference](http://en.cppreference.com/w/cpp) - 有很多实例，还有新特性的文档，很全面。
+* [C++ Rvalue References Explained](http://thbecker.net/articles/rvalue_references/section_01.html) - 帮助理解rvalue references, perfect forwarding, and move semantics.
+* [clang](http://clang.llvm.org/cxx_status.html) and [gcc](https://gcc.gnu.org/projects/cxx-status.html)两大编译器的营地。
+* [Compiler explorer](https://godbolt.org/)
+* [Scott Meyers' Effective Modern C++](https://www.amazon.com/Effective-Modern-Specific-Ways-Improve/dp/1491903996) - 听上去很高大上，但是读起来很费劲。
+* [Jason Turner's C++ Weekly](https://www.youtube.com/channel/UCxHAlbZQNFU2LgEtiqd2Maw) - 通常情况下打不开的。
+* [What can I do with a moved-from object?](http://stackoverflow.com/questions/7027523/what-can-i-do-with-a-moved-from-object)
+* [What are some uses of decltype(auto)?](http://stackoverflow.com/questions/24109737/what-are-some-uses-of-decltypeauto)
+* 如果有足够的耐心，SO也很有帮助。
+
+## 作者
+Anthony Calandra
+
+## 内容贡献者
+See: https://github.com/AnthonyCalandra/modern-cpp-features/graphs/contributors
+
+## 翻译
+LeoBrilliant
+
+## License
+MIT
